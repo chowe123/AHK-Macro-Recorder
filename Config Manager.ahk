@@ -43,6 +43,7 @@ CurrentProfile := "Default"
 overlayHwnd := 0
 playHwnd := 0
 NextMacroId := 2
+BlockMouseActive := 0      ; Global flag for hotkey click blocking
 
 ; Seed first macro
 m := {}
@@ -707,7 +708,7 @@ if (!idx || idx < 1 || idx > Macros.Length())
     SetTimer, ClearToolTip, -4000
     return
 }
-GoSub, ToggleMacroByIdx
+toggleMacro(idx)
 
 if (cleanKey != "")
     KeyWait, %cleanKey%, T0.2
@@ -721,60 +722,70 @@ return
 ; PLAYBACK CONTROL
 ; ============================================
 
-ToggleMacroByIdx:
-; 'idx' must be set before GoSub
-mc := Macros[idx]
+toggleMacro(idx) {
+    global Macros, BlockMouseState, BlockMouseActive
+    mc := Macros[idx]
 
-if (mc.Actions = "")
-{
-    tempName := mc.Name
-    GuiControl, Main:, StatusText, "%tempName%" has no recorded actions.
-    return
-}
-
-if (mc.Mode = "Toggle")
-{
-    if (mc.IsPlaying)
+    if (mc.Actions = "")
     {
-        Macros[idx].IsPlaying := false
         tempName := mc.Name
-        GuiControl, Main:, StatusText, Stopped "%tempName%".
-        
-        ; If no macros are playing anymore, hide the overlay
-        anyLeft := false
-        Loop, % Macros.Length()
-            if (Macros[A_Index].IsPlaying)
-                anyLeft := true
-        if (!anyLeft)
-            Gui, PlayOverlay:Hide
+        GuiControl, Main:, StatusText, "%tempName%" has no recorded actions.
+        return
+    }
+
+    if (mc.Mode = "Toggle")
+    {
+        if (mc.IsPlaying)
+        {
+            Macros[idx].IsPlaying := false
+            tempName := mc.Name
+            GuiControl, Main:, StatusText, Stopped "%tempName%".
+            
+            ; If no macros are playing anymore, hide the overlay and block
+            anyLeft := false
+            Loop, % Macros.Length()
+                if (Macros[A_Index].IsPlaying)
+                    anyLeft := true
+            if (!anyLeft)
+            {
+                Gui, PlayOverlay:Hide
+                BlockInput, MouseMoveOff
+                BlockMouseActive := 0
+            }
+        }
+        else
+        {
+            Macros[idx].IsPlaying := true
+            SetTimer, PlayMacroLoop, -1
+            tempName := mc.Name
+            GuiControl, Main:, StatusText, Playing "%tempName%" (Toggle)...
+            
+            ; Show red play overlay (very transparent, click-through)
+            Gui, PlayOverlay:Show, NoActivate
+            
+            ; Enable mouse blocking immediately if requested
+            if (BlockMouseState)
+            {
+                BlockInput, MouseMove
+                BlockMouseActive := 1
+            }
+        }
     }
     else
     {
-        Macros[idx].IsPlaying := true
-        SetTimer, PlayMacroLoop, -1
+        ; Once mode
         tempName := mc.Name
-        GuiControl, Main:, StatusText, Playing "%tempName%" (Toggle)...
-        
-        ; Show red play overlay (very transparent, click-through)
-        Gui, PlayOverlay:Show, NoActivate
+        GuiControl, Main:, StatusText, Playing "%tempName%" once...
+        ExecuteMacro(idx)
+        GuiControl, Main:, StatusText, Done playing "%tempName%".
     }
 }
-else
-{
-    ; Once mode
-    tempName := mc.Name
-    GuiControl, Main:, StatusText, Playing "%tempName%" once...
-    playIdx := idx
-    GoSub, ExecuteMacroByIdx
-    GuiControl, Main:, StatusText, Done playing "%tempName%".
-}
-return
 
 PlayMacroBtn:
 if (SelectedIdx < 1 || SelectedIdx > Macros.Length())
     return
 idx := SelectedIdx
-GoSub, ToggleMacroByIdx
+toggleMacro(idx)
 return
 
 StopAllBtn:
@@ -782,6 +793,8 @@ Loop, % Macros.Length()
     Macros[A_Index].IsPlaying := false
 GuiControl, Main:, StatusText, All macros stopped.
 Gui, PlayOverlay:Hide
+BlockInput, MouseMoveOff
+BlockMouseActive := 0
 return
 
 ; ============================================
@@ -796,6 +809,18 @@ Loop
     fastLoopCounter++
     anyPlaying := false
     
+    ; Update block state at start of loop
+    if (BlockMouseState)
+    {
+        BlockInput, MouseMove
+        BlockMouseActive := 1
+    }
+    else
+    {
+        BlockInput, MouseMoveOff
+        BlockMouseActive := 0
+    }
+    
     GuiControlGet, ldMin,, LoopDelayMin
     GuiControlGet, ldMax,, LoopDelayMax
     
@@ -807,8 +832,7 @@ Loop
         if (Macros[A_Index].IsPlaying)
         {
             anyPlaying := true
-            playIdx := A_Index
-            GoSub, ExecuteMacroByIdx
+            ExecuteMacro(A_Index)
 
             if (Macros[A_Index].IsPlaying)
             {
@@ -819,19 +843,17 @@ Loop
                     else
                         rndWait := ldm1
                         
-                    if (rndWait > 0)
-                        Sleep, %rndWait%
+                    ResponsiveSleep(rndWait, A_Index)
                 }
             }
         }
     }
     
-    if (anyPlaying && BlockMouseState)
-        BlockInput, MouseMove
     
     if (!anyPlaying)
     {
         BlockInput, MouseMoveOff
+        BlockMouseActive := 0
         Gui, PlayOverlay:Hide
         break
     }
@@ -842,95 +864,115 @@ Loop
 }
 return
 
-ExecuteMacroByIdx:
-; 'playIdx' must be set before GoSub
-actions := Macros[playIdx].Actions
-actLoopCnt := 0
-Loop, Parse, actions, |
-{
-    actLoopCnt++
-    if (Mod(actLoopCnt, 20) = 0)
-        Sleep, -1
-        
-    ; Bail if stopped mid-execution
-    if (!Macros[playIdx].IsPlaying && Macros[playIdx].Mode = "Toggle")
+ResponsiveSleep(ms, idx) {
+    global Macros
+    if (ms < 100) { ; Use native sleep for high-speed delays
+        if (ms > 0)
+            Sleep, %ms%
         return
-
-    parts := StrSplit(A_LoopField, ":")
-    delay := 0
-    type := parts[1]
+    }
     
-    if (InStr(type, "KEY") || InStr(type, "MOUSE"))
-    {
-        delay := InStr(type, "KEY") ? parts[3] : parts[5]
-        
-        if InStr(delay, "-")
-        {
-            dp := StrSplit(delay, "-")
-            d1 := Trim(dp[1])
-            d2 := Trim(dp[2])
-            Random, rDelay, %d1%, %d2%
-            delay := rDelay
-        }
-        
-        if (delay > 0)
-        {
-            Sleep, delay
-            if (!Macros[playIdx].IsPlaying && Macros[playIdx].Mode = "Toggle")
-                return
-        }
-    }
-
-    if (type = "KEY")
-    {
-        key := parts[2]
-        Send, {%key%}
-    }
-    else if (type = "KEY_DOWN")
-    {
-        key := parts[2]
-        Send, {%key% down}
-    }
-    else if (type = "KEY_UP")
-    {
-        key := parts[2]
-        Send, {%key% up}
-    }
-    else if (type = "MOUSE")
-    {
-        btn := parts[2]
-        x := parts[3]
-        y := parts[4]
-        MouseMove, %x%, %y%, 0
-        if (btn = "L")
-            Click, %x%, %y%
-        else
-            Click, right, %x%, %y%
-    }
-    else if (type = "MOUSE_DOWN")
-    {
-        btn := parts[2]
-        x := parts[3]
-        y := parts[4]
-        MouseMove, %x%, %y%, 0
-        if (btn = "L")
-            Click, down, %x%, %y%
-        else
-            Click, right down, %x%, %y%
-    }
-    else if (type = "MOUSE_UP")
-    {
-        btn := parts[2]
-        x := parts[3]
-        y := parts[4]
-        MouseMove, %x%, %y%, 0
-        if (btn = "L")
-            Click, up, %x%, %y%
-        else
-            Click, right up, %x%, %y%
+    stopAt := A_TickCount + ms
+    while (A_TickCount < stopAt) {
+        if (!Macros[idx].IsPlaying)
+            return
+            
+        remaining := stopAt - A_TickCount
+        sleepTime := (remaining > 50) ? 50 : remaining
+        if (sleepTime > 0)
+            Sleep, %sleepTime%
     }
 }
-return
+
+ExecuteMacro(idx) {
+    global Macros
+    actions := Macros[idx].Actions
+    actLoopCnt := 0
+    Loop, Parse, actions, |
+    {
+        actLoopCnt++
+        if (Mod(actLoopCnt, 20) = 0)
+            Sleep, -1
+            
+        ; Bail if stopped mid-execution
+        if (!Macros[idx].IsPlaying && Macros[idx].Mode = "Toggle")
+            return
+
+        parts := StrSplit(A_LoopField, ":")
+        delay := 0
+        type := parts[1]
+        
+        if (InStr(type, "KEY") || InStr(type, "MOUSE"))
+        {
+            delay := InStr(type, "KEY") ? parts[3] : parts[5]
+            
+            if InStr(delay, "-")
+            {
+                dp := StrSplit(delay, "-")
+                d1 := Trim(dp[1])
+                d2 := Trim(dp[2])
+                Random, rDelay, %d1%, %d2%
+                delay := rDelay
+            }
+            
+            if (delay > 0)
+            {
+                ResponsiveSleep(delay, idx)
+                if (!Macros[idx].IsPlaying && Macros[idx].Mode = "Toggle")
+                    return
+            }
+        }
+
+        if (type = "KEY")
+        {
+            key := parts[2]
+            Send, {%key%}
+        }
+        else if (type = "KEY_DOWN")
+        {
+            key := parts[2]
+            Send, {%key% down}
+        }
+        else if (type = "KEY_UP")
+        {
+            key := parts[2]
+            Send, {%key% up}
+        }
+        else if (type = "MOUSE")
+        {
+            btn := parts[2]
+            x := parts[3]
+            y := parts[4]
+            MouseMove, %x%, %y%, 0
+            if (btn = "L")
+                Click, %x%, %y%
+            else
+                Click, right, %x%, %y%
+        }
+        else if (type = "MOUSE_DOWN")
+        {
+            btn := parts[2]
+            x := parts[3]
+            y := parts[4]
+            MouseMove, %x%, %y%, 0
+            if (btn = "L")
+                Click, down, %x%, %y%
+            else
+                Click, right down, %x%, %y%
+        }
+        else if (type = "MOUSE_UP")
+        {
+            btn := parts[2]
+            x := parts[3]
+            y := parts[4]
+            MouseMove, %x%, %y%, 0
+            if (btn = "L")
+                Click, up, %x%, %y%
+            else
+                Click, right up, %x%, %y%
+        }
+    }
+}
 
 ; ============================================
 ; STOP-RECORDING KEY
@@ -1028,6 +1070,7 @@ return
 
 StartRecording:
 if (IsRecording)
+    return
 Gui, Main:Submit, NoHide
 if (MacroDD = "")
     return
@@ -1111,7 +1154,13 @@ if (SelectedIdx >= 1 && SelectedIdx <= Macros.Length())
     readable := FormatForDisplay(RecordingBuffer)
     GuiControl, Main:, EditBox, %readable%
 }
-GuiControl, Main:, StatusText, Recording saved.
+
+; Restore play keys and stop key standard behavior
+GoSub, BindAllHotkeys
+GoSub, BindStopKey
+GoSub, BindPanicKey
+
+GuiControl, Main:, StatusText, Recording saved. Play keys active.
 return
 
 ; ============================================
@@ -1322,3 +1371,14 @@ Receive_WM_COPYDATA(wParam, lParam)
     }
     return 1
 }
+; ============================================
+; MOUSE BLOCKING HOTKEYS
+; ============================================
+
+#If (BlockMouseActive)
+*LButton::return
+*RButton::return
+*MButton::return
+*WheelUp::return
+*WheelDown::return
+#If
