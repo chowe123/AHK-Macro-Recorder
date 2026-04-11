@@ -35,9 +35,9 @@ StopKeyName := "``"        ; Default stop-recording key (backtick)
 BoundStopKey := ""
 PanicKeyName := "End"      ; Default panic exit key
 BoundPanicKey := ""
-MasterHotkeyName := ""         ; Hotkey to toggle enable/disable
+MasterHotkeyName := ""     ; Hotkey to toggle enable/disable
 BoundMasterHotkey := ""
-BlockMouseState := 0       ; Block mouse during toggle playback
+BlockMouseState := 0       ; Block mouse during playback
 LoopDelay := 500           ; Default loop delay between repetitions
 CurrentProfile := "Default"
 overlayHwnd := 0
@@ -49,9 +49,11 @@ BlockMouseActive := 0      ; Global flag for hotkey click blocking
 m := {}
 m.Name := "Macro 1"
 m.Hotkey := "F1"
-m.Mode := "Toggle"
 m.Actions := ""
 m.IsPlaying := false
+m.LimitLoops := false      
+m.LoopLimit := 5           
+m.CurrentLoop := 0         
 Macros.Push(m)
 
 ; ============================================
@@ -94,20 +96,22 @@ Gui, Main:Add, Text, x325 y150, Panic Exit:
 Gui, Main:Add, Edit, x385 y147 w40 vPanicKeyInput, End
 Gui, Main:Add, Button, x430 y147 w30 h23 gOnPanicKeyChange, Set
 
-Gui, Main:Add, Text, x20 y180, Mode:
-Gui, Main:Add, Radio, x60 y180 vModeToggle gOnModeChange Checked, Toggle
-Gui, Main:Add, Radio, x130 y180 vModeOnce gOnModeChange, Once
-Gui, Main:Add, Checkbox, x190 y180 vBlockMouseCB gOnBlockMouseCB, Block Mouse Input
+Gui, Main:Add, Checkbox, x20 y180 vBlockMouseCB gOnBlockMouseCB, Block Mouse Input
 Gui, Main:Add, Text, x310 y180, Loop Delay:
 Gui, Main:Add, Edit, x370 y177 w35 vLoopDelayMin, 500
 Gui, Main:Add, Text, x408 y180, -
 Gui, Main:Add, Edit, x418 y177 w35 vLoopDelayMax, 
 Gui, Main:Add, Text, x310 y198 cGray, (Leave 2nd box blank for static)
 
-Gui, Main:Add, Button, x20 y215 w80 h30 gStartRecording, Record
-Gui, Main:Add, Button, x105 y215 w80 h30 gStopRecording, Stop Rec
-Gui, Main:Add, Button, x190 y215 w80 h30 gPlayMacroBtn, Play
-Gui, Main:Add, Button, x275 y215 w80 h30 gStopAllBtn, Stop All
+; New Loop Limit Controls
+Gui, Main:Add, Checkbox, x20 y210 vLimitLoopsCB gOnLimitLoopsCB, Limit Loops to:
+Gui, Main:Add, Edit, x125 y207 w40 vLoopLimitInput gOnLoopLimitChange, 5
+Gui, Main:Add, Text, x170 y210 cGray, times
+
+Gui, Main:Add, Button, x20 y245 w80 h30 gStartRecording, Record
+Gui, Main:Add, Button, x105 y245 w80 h30 gStopRecording, Stop Rec
+Gui, Main:Add, Button, x190 y245 w80 h30 gPlayMacroBtn, Play
+Gui, Main:Add, Button, x275 y245 w80 h30 gStopAllBtn, Stop All
 
 ; --- Editor ---
 Gui, Main:Add, GroupBox, x10 y325 w460 h195, Editor (Auto-applied)  (Use format: delay: 10ms  OR  delay: random(10,50)ms)
@@ -163,8 +167,6 @@ GoSub, BindAllHotkeys
 GoSub, BindStopKey
 GoSub, LoadLastProfile
 GoSub, OnEnableToggle
-return
-
 return
 
 ; ============================================
@@ -262,9 +264,11 @@ Macros := []
 m := {}
 m.Name := "Macro 1"
 m.Hotkey := "F1"
-m.Mode := "Toggle"
 m.Actions := ""
 m.IsPlaying := false
+m.LimitLoops := false
+m.LoopLimit := 5
+m.CurrentLoop := 0
 Macros.Push(m)
 SelectedIdx := 1
 NextMacroId := 2
@@ -298,10 +302,6 @@ IniWrite, %LoopDelayMax%, %profilePath%, General, LoopDelayMax
 FileDelete, %Config_LastProfileFile%
 FileAppend, %CurrentProfile%, %Config_LastProfileFile%
 
-Gui, Main:Submit, NoHide
-ld := LoopDelayInput + 0
-IniWrite, %ld%, %profilePath%, General, LoopDelay
-
 ; Each macro
 Loop, % Macros.Length()
 {
@@ -309,8 +309,9 @@ Loop, % Macros.Length()
     mc := Macros[A_Index]
     IniWrite, % mc.Name, %profilePath%, %section%, Name
     IniWrite, % mc.Hotkey, %profilePath%, %section%, Hotkey
-    IniWrite, % mc.Mode, %profilePath%, %section%, Mode
     IniWrite, % mc.Actions, %profilePath%, %section%, Actions
+    IniWrite, % mc.LimitLoops, %profilePath%, %section%, LimitLoops
+    IniWrite, % mc.LoopLimit, %profilePath%, %section%, LoopLimit
 }
 GoSub, RefreshProfileList
 GuiControl, Main:, StatusText, Profile "%CurrentProfile%" saved.
@@ -360,11 +361,14 @@ Loop, %macroCount%
     mc.Name := val
     IniRead, val, %profilePath%, %section%, Hotkey, % ""
     mc.Hotkey := val
-    IniRead, val, %profilePath%, %section%, Mode, Toggle
-    mc.Mode := val
     IniRead, val, %profilePath%, %section%, Actions, % ""
     mc.Actions := val
+    IniRead, val, %profilePath%, %section%, LimitLoops, 0
+    mc.LimitLoops := (val = 1)
+    IniRead, val, %profilePath%, %section%, LoopLimit, 5
+    mc.LoopLimit := val
     mc.IsPlaying := false
+    mc.CurrentLoop := 0
     Macros.Push(mc)
 }
 
@@ -373,9 +377,11 @@ if (Macros.Length() = 0)
     mc := {}
     mc.Name := "Macro 1"
     mc.Hotkey := "F1"
-    mc.Mode := "Toggle"
     mc.Actions := ""
     mc.IsPlaying := false
+    mc.LimitLoops := false
+    mc.LoopLimit := 5
+    mc.CurrentLoop := 0
     Macros.Push(mc)
 }
 
@@ -410,9 +416,11 @@ NextMacroId++
 mc := {}
 mc.Name := newName
 mc.Hotkey := ""
-mc.Mode := "Toggle"
 mc.Actions := ""
 mc.IsPlaying := false
+mc.LimitLoops := false
+mc.LoopLimit := 5
+mc.CurrentLoop := 0
 Macros.Push(mc)
 
 SelectedIdx := Macros.Length()
@@ -472,15 +480,21 @@ Loop, % Macros.Length()
 GoSub, LoadMacroToGUI
 return
 
-OnModeChange:
-Gui, Main:Submit, NoHide
-if (SelectedIdx >= 1 && SelectedIdx <= Macros.Length())
-    Macros[SelectedIdx].Mode := (ModeToggle = 1) ? "Toggle" : "Once"
-return
-
 OnBlockMouseCB:
 Gui, Main:Submit, NoHide
 BlockMouseState := BlockMouseCB
+return
+
+OnLimitLoopsCB:
+Gui, Main:Submit, NoHide
+if (SelectedIdx >= 1 && SelectedIdx <= Macros.Length())
+    Macros[SelectedIdx].LimitLoops := LimitLoopsCB
+return
+
+OnLoopLimitChange:
+Gui, Main:Submit, NoHide
+if (SelectedIdx >= 1 && SelectedIdx <= Macros.Length())
+    Macros[SelectedIdx].LoopLimit := LoopLimitInput
 return
 
 RebuildMacroDD:
@@ -496,16 +510,8 @@ if (SelectedIdx < 1 || SelectedIdx > Macros.Length())
     return
 mc := Macros[SelectedIdx]
 GuiControl, Main:, PlayKeyInput, % mc.Hotkey
-if (mc.Mode = "Once")
-{
-    GuiControl, Main:, ModeToggle, 0
-    GuiControl, Main:, ModeOnce, 1
-}
-else
-{
-    GuiControl, Main:, ModeToggle, 1
-    GuiControl, Main:, ModeOnce, 0
-}
+GuiControl, Main:, LimitLoopsCB, % mc.LimitLoops
+GuiControl, Main:, LoopLimitInput, % mc.LoopLimit
 readable := FormatForDisplay(mc.Actions)
 GuiControl, Main:, EditBox, %readable%
 return
@@ -514,7 +520,8 @@ SaveCurrentToMacro:
 if (SelectedIdx < 1 || SelectedIdx > Macros.Length())
     return
 Gui, Main:Submit, NoHide
-Macros[SelectedIdx].Mode := (ModeToggle = 1) ? "Toggle" : "Once"
+Macros[SelectedIdx].LimitLoops := LimitLoopsCB
+Macros[SelectedIdx].LoopLimit := LoopLimitInput
 return
 
 ; ============================================
@@ -733,51 +740,41 @@ toggleMacro(idx) {
         return
     }
 
-    if (mc.Mode = "Toggle")
+    if (mc.IsPlaying)
     {
-        if (mc.IsPlaying)
+        Macros[idx].IsPlaying := false
+        tempName := mc.Name
+        GuiControl, Main:, StatusText, Stopped "%tempName%".
+        
+        ; If no macros are playing anymore, hide the overlay and block
+        anyLeft := false
+        Loop, % Macros.Length()
+            if (Macros[A_Index].IsPlaying)
+                anyLeft := true
+        if (!anyLeft)
         {
-            Macros[idx].IsPlaying := false
-            tempName := mc.Name
-            GuiControl, Main:, StatusText, Stopped "%tempName%".
-            
-            ; If no macros are playing anymore, hide the overlay and block
-            anyLeft := false
-            Loop, % Macros.Length()
-                if (Macros[A_Index].IsPlaying)
-                    anyLeft := true
-            if (!anyLeft)
-            {
-                Gui, PlayOverlay:Hide
-                BlockInput, MouseMoveOff
-                BlockMouseActive := 0
-            }
-        }
-        else
-        {
-            Macros[idx].IsPlaying := true
-            SetTimer, PlayMacroLoop, -1
-            tempName := mc.Name
-            GuiControl, Main:, StatusText, Playing "%tempName%" (Toggle)...
-            
-            ; Show red play overlay (very transparent, click-through)
-            Gui, PlayOverlay:Show, NoActivate
-            
-            ; Enable mouse blocking immediately if requested
-            if (BlockMouseState)
-            {
-                BlockInput, MouseMove
-                BlockMouseActive := 1
-            }
+            Gui, PlayOverlay:Hide
+            BlockInput, MouseMoveOff
+            BlockMouseActive := 0
         }
     }
     else
     {
-        ; Once mode
+        Macros[idx].IsPlaying := true
+        Macros[idx].CurrentLoop := 0 ; Reset counter on start
+        SetTimer, PlayMacroLoop, -1
         tempName := mc.Name
-        GuiControl, Main:, StatusText, Playing "%tempName%" once...
-        ExecuteMacro(idx)
-        GuiControl, Main:, StatusText, Done playing "%tempName%".
+        GuiControl, Main:, StatusText, Playing "%tempName%"...
+        
+        ; Show red play overlay (very transparent, click-through)
+        Gui, PlayOverlay:Show, NoActivate
+        
+        ; Enable mouse blocking immediately if requested
+        if (BlockMouseState)
+        {
+            BlockInput, MouseMove
+            BlockMouseActive := 1
+        }
     }
 }
 
@@ -831,11 +828,22 @@ Loop
     {
         if (Macros[A_Index].IsPlaying)
         {
-            anyPlaying := true
             ExecuteMacro(A_Index)
+            
+            ; Increment loop count if limit enabled
+            if (Macros[A_Index].LimitLoops)
+            {
+                Macros[A_Index].CurrentLoop++
+                if (Macros[A_Index].CurrentLoop >= Macros[A_Index].LoopLimit)
+                {
+                    Macros[A_Index].IsPlaying := false
+                }
+            }
 
+            ; Only count as still playing if it wasn't just stopped
             if (Macros[A_Index].IsPlaying)
             {
+                anyPlaying := true
                 if (ldm1 != "")
                 {
                     if (ldm2 != "")
@@ -895,7 +903,7 @@ ExecuteMacro(idx) {
             Sleep, -1
             
         ; Bail if stopped mid-execution
-        if (!Macros[idx].IsPlaying && Macros[idx].Mode = "Toggle")
+        if (!Macros[idx].IsPlaying)
             return
 
         parts := StrSplit(A_LoopField, ":")
@@ -918,7 +926,7 @@ ExecuteMacro(idx) {
             if (delay > 0)
             {
                 ResponsiveSleep(delay, idx)
-                if (!Macros[idx].IsPlaying && Macros[idx].Mode = "Toggle")
+                if (!Macros[idx].IsPlaying)
                     return
             }
         }
