@@ -756,6 +756,7 @@ toggleMacro(idx) {
             Gui, PlayOverlay:Hide
             BlockInput, MouseMoveOff
             BlockMouseActive := 0
+            ReleaseStuckInputs()
         }
     }
     else
@@ -792,6 +793,7 @@ GuiControl, Main:, StatusText, All macros stopped.
 Gui, PlayOverlay:Hide
 BlockInput, MouseMoveOff
 BlockMouseActive := 0
+ReleaseStuckInputs()
 return
 
 ; ============================================
@@ -863,6 +865,7 @@ Loop
         BlockInput, MouseMoveOff
         BlockMouseActive := 0
         Gui, PlayOverlay:Hide
+        ReleaseStuckInputs()
         break
     }
     
@@ -1379,6 +1382,34 @@ Receive_WM_COPYDATA(wParam, lParam)
     }
     return 1
 }
+
+; ============================================
+; RELEASE LOGICAL STUCK INPUTS
+; ============================================
+
+ReleaseStuckInputs() {
+    if GetKeyState("LButton")
+        Send, {Blind}{LButton Up}
+    if GetKeyState("RButton")
+        Send, {Blind}{RButton Up}
+    if GetKeyState("MButton")
+        Send, {Blind}{MButton Up}
+    if GetKeyState("Shift")
+        Send, {Blind}{Shift Up}
+    if GetKeyState("Ctrl")
+        Send, {Blind}{Ctrl Up}
+    if GetKeyState("Alt")
+        Send, {Blind}{Alt Up}
+    if GetKeyState("LWin")
+        Send, {Blind}{LWin Up}
+    if GetKeyState("RWin")
+        Send, {Blind}{RWin Up}
+    if GetKeyState("Space")
+        Send, {Blind}{Space Up}
+    if GetKeyState("Enter")
+        Send, {Blind}{Enter Up}
+}
+
 ; ============================================
 ; MOUSE BLOCKING HOTKEYS
 ; ============================================
