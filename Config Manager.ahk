@@ -807,19 +807,8 @@ Loop
 {
     fastLoopCounter++
     anyPlaying := false
-    
-    ; Update block state at start of loop
-    if (BlockMouseState)
-    {
-        BlockInput, MouseMove
-        BlockMouseActive := 1
-    }
-    else
-    {
-        BlockInput, MouseMoveOff
-        BlockMouseActive := 0
-    }
-    
+
+
     GuiControlGet, ldMin,, LoopDelayMin
     GuiControlGet, ldMax,, LoopDelayMax
     
